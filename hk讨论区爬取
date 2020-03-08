@@ -1,0 +1,188 @@
+'''
+2019.12.11
+香港讨论区
+https://news.discuss.com.hk/forumdisplay.php?fid=54&filter=type&orderby=dateline&ascdesc=DESC&threadMode=neutral&typeids=98,99,100
+
+https://news.discuss.com.hk/forumdisplay.php?fid=54&filter=type&typeids=98,99,100&orderby=dateline&ascdesc=DESC&threadMode=neutral&page=2
+'''
+
+import requests
+import re
+from lxml import etree
+import csv
+import time
+from itertools import count
+from pyquery import PyQuery as pq
+from urllib.parse import urlsplit
+
+
+class LoopOver(BaseException):
+    def __init__(self):
+        super().__init__()
+
+
+class Spider:
+    def __init__(self):
+        # 路径
+        # .(一个点)表示当前
+        # 绝对路径请用如下格式(反斜杠)
+        # C:/Program Files (x86)/Dev-Cpp
+        # D:/360MoveData/Users/yjc/Documents
+
+        self.path = r'D:\爬虫\hkdiscuss\data28140000_28150000'
+        # ---------------------------------------------
+        #28120000 -28864552
+
+        # origin表示起始id
+        self.origin = 28141221
+        # destination表示终止id
+        self.destination =  28150000         #28864552
+        # ---------------------------------------------
+
+        self.flag = 0
+        self.url = 'https://news.discuss.com.hk/forumdisplay.php?fid=54&filter=type&orderby=dateline&ascdesc=DESC&threadMode=neutral&typeids=98,99,100'
+        self.pru = 'https://news.discuss.com.hk/viewthread.php?tid={}&extra=page=1&filter=type&typeids=98,99,100&orderby=dateline&ascdesc=DESC&page={}'
+
+    def run(self):
+        strat = time.time()
+        try:
+            for nid in range(self.origin, self.destination):
+                self.nid = nid
+                for text, index in self.get_page(urlid=nid):
+                    if text:
+                        item = self.parse_page(text, index=index)
+                        if index == 1:
+                            if len(item[2]) > 0:
+                                print('{}.csv'.format(nid), end=' ')
+                                self.save_data(name=nid, item=item)
+                                self.flag += 1
+                            else:
+                                break
+                        else:
+                            self.save_data(name=nid, item=item)
+                    time.sleep(3)
+        except LoopOver:
+            print('已经保存{}个帖子，爬取结束!'.format(self.flag))
+        finally:
+            nt = time.asctime()
+            with open('error.log', 'a', encoding='utf-8') as f:
+                f.write(str(self.nid)+' '+str(nt)+'\n')
+            print(nt)
+            end = time.time()
+            self.runtime = end - strat
+            print('总共用时{}分钟'.format(self.runtime/60))
+        end = time.time()
+
+        self.runtime = end - strat
+
+    def get_page(self, urlid):
+        for index in count(1):
+            print('page index is ', index)
+            url = self.pru.format(urlid, index)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/76.0.3809.87 Safari/537.36',
+            }
+            print('url is ', url)
+            r = requests.get(url, headers=headers)
+            if urlsplit(r.url).netloc != 'news.discuss.com.hk':
+                print('urlsplit(r.url).netloc > ', urlsplit(r.url).netloc)
+                break
+            if not self.json_is_valid(response=r, index=index):
+                print('not json_is_valid')
+                break
+            end = int((self.replynum-15)/15)+1
+            yield r.text, index
+            if index >= end:
+                break
+        yield None, None
+
+    def json_is_valid(self, response, index):
+        html = etree.HTML(response.text)
+        try:
+            if index == 1:
+                try:
+                    replynum = int(re.findall(
+                        '\d+\.?\d*', html.xpath('//div[@id="viewthread-number"]/ul/li[2]/text()')[0])[0])
+                except:
+                    replynum = int(re.findall('\d+\.?\d*', html.xpath('//div[@class="viewthread-number"]/ul/li[2]/text()')[0])[
+                        0])
+                print('回复数', replynum)
+                if replynum < 15:
+                    return False
+                self.replynum = replynum
+        except Exception as error:
+            print('json_is_valid 发生错误 >', error)
+            return False
+
+        if (len(html.xpath('//div[contains(@class,"mainbox viewthread")]'))) == 0:
+            return False
+        return True
+
+    def parse_page(self, text, index=None):
+        doc = pq(text)
+        doc('div.quote').remove()
+        item = []
+        html = etree.HTML(str(doc.xhtml_to_html()))
+
+        for i in range(1, len(html.xpath('//div[contains(@class,"mainbox viewthread")]')) + 1):
+            try:
+                authorName = \
+                    html.xpath(
+                        '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td/cite/a/text()'.format(i))[0]
+            except IndexError:
+                authorName = \
+                    html.xpath(
+                        '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td/div[@class="author-detail"]/div[@class="autor-name-row"]/a/text()'.format(
+                            i))[0]
+
+            content = ' '.join(i.strip().replace('\n', '') for i in html.xpath(
+                '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td[@class="postcontent"]/div[@class="postmessage defaultpost"]/div[@class="t_msgfont"]//text()'.format(
+                    i)))
+            if not content:
+                content = ' '.join(i.strip().replace('\n', '') for i in html.xpath(
+                    '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td[2]/div[@class="postmessage defaultpost"]/div[contains(@class,"t_msgfont")]//text()'.format(
+                        i)))
+
+            messageDate = ' '.join(i.strip().replace('\n', '') for i in html.xpath(
+                '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td[contains(@class,"content")]/div[@class="postinfo"]//text()'.format(
+                    i)) if '發' in i)
+            if len(messageDate) < 8:
+                messageDate = ' '.join(i.strip().replace('\n', '') for i in html.xpath(
+                    '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td[contains(@class,"content")]/div[@class="postinfo"]/div[2]/div/div/span//text()'.format(
+                        i)))
+            if len(messageDate) < 8:
+                messageDate = ' '.join(i.strip().replace('\n', '') for i in html.xpath(
+                    '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td[contains(@class,"content")]/div[@class="postinfo"]//div[@class="tooltip"]/span//text()'.format(
+                        i)))
+                # html.xpath(
+                # '//div[contains(@class,"mainbox viewthread")][{}]/table/tr/td[@class="postcontent"]/div[@class="postinfo"]//text()'.format(
+                #     i))
+            if not messageDate:
+                with open('error.html', 'w', encoding='utf-8') as f:
+                    f.write(text)
+
+            item.append(authorName)
+            item.append(messageDate)
+            item.append(content)
+        return item
+
+    def save_data(self, name, item):
+        '''
+        保存文件
+        '''
+        with open('{}/{}.csv'.format(self.path, name), 'a', encoding='utf_8_sig', newline='') as csvfile:
+            print('item >>> ')
+            writer = csv.writer(csvfile)
+            for i in range(int(len(item) / 3)):
+                print(item[3 * i:3 * i + 3])
+                writer.writerow(item[3 * i:3 * i + 3])
+
+    @property
+    def time(self):
+        return '总共用时：{}秒'.format(self.runtime)
+
+
+if __name__ == '__main__':
+    spider = Spider()
+    spider.run()
+    print(spider.time)  # 运行总时间
